@@ -1,0 +1,37 @@
+# Local development + runner integration tests.
+# Values here are dev-only defaults; production secrets come from Railway env vars.
+services:
+  mysql:
+    build: ./sql-runner/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-dev_root_password}
+      RUNNER_ADMIN_USER: ${RUNNER_ADMIN_USER:-qq_admin}
+      RUNNER_ADMIN_PASSWORD: ${RUNNER_ADMIN_PASSWORD:-dev_admin_password}
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      # Healthy only once the init script has created the admin account.
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -u$${RUNNER_ADMIN_USER} -p$${RUNNER_ADMIN_PASSWORD} -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+  sql-runner:
+    build: ./sql-runner
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      RUNNER_SECRET: ${RUNNER_SECRET:-dev_runner_secret_change_me_0123456789}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      RUNNER_ADMIN_USER: ${RUNNER_ADMIN_USER:-qq_admin}
+      RUNNER_ADMIN_PASSWORD: ${RUNNER_ADMIN_PASSWORD:-dev_admin_password}
+    ports:
+      - "127.0.0.1:4000:4000"
+
+volumes:
+  mysql-data:

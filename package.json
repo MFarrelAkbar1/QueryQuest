@@ -1,0 +1,26 @@
+{
+  "name": "queryquest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "lint": "eslint . && npm --prefix sql-runner run lint",
+    "typecheck": "tsc --noEmit && npm --prefix sql-runner run typecheck",
+    "test": "vitest run && npm --prefix sql-runner run test",
+    "test:runner": "npm --prefix sql-runner run test:integration",
+    "test:all": "npm run test && npm run test:runner"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
+  }
+}
