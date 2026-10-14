@@ -1,0 +1,152 @@
+import type { ChapterInput } from "../schema";
+
+export const chapter2: ChapterInput = {
+  id: "t1-c2",
+  title: "Filtering with WHERE",
+  summary: "Keep only the rows you care about using WHERE and comparison operators.",
+  bonusXp: 50,
+  challenges: [
+    {
+      id: "t1-c2-01",
+      title: "PC games only",
+      difficulty: "easy",
+      objective: "Filter rows with WHERE and the = operator.",
+      concept:
+        "**WHERE** keeps only the rows for which a condition is true:\n\n```sql\nSELECT title FROM games WHERE genre = 'Puzzle';\n```\n\nText values go in **single quotes**. Numbers don't need quotes.",
+      problem: "A customer only plays on PC. Return the `title` of every game whose `platform` is `PC`.",
+      datasetId: "arcade",
+      statementType: "select",
+      starterSql: "SELECT title\nFROM games\nWHERE ",
+      hints: [
+        "Add a WHERE clause after FROM games.",
+        "Compare the platform column to the text 'PC' with `=`.",
+        "`... WHERE platform = 'PC';`",
+      ],
+      solution: {
+        sql: "SELECT title FROM games WHERE platform = 'PC';",
+        explanation: "`WHERE platform = 'PC'` keeps only rows whose platform is exactly PC, and SELECT title returns just their names.",
+      },
+      expected: {
+        columns: ["title"],
+        rows: [
+          ["Pixel Raiders"],
+          ["Dungeon Logic"],
+          ["Starbound Tactics"],
+          ["Castle Builder"],
+          ["Mystic Grove"],
+          ["Sky Pilots"],
+          ["Desert Rally"],
+        ],
+        ordered: false,
+      },
+    },
+    {
+      id: "t1-c2-02",
+      title: "Premium games",
+      difficulty: "easy",
+      objective: "Use > to compare numbers.",
+      concept:
+        "Comparison operators work on numbers too:\n\n| Operator | Meaning |\n|---|---|\n| `=` | equal |\n| `>` / `<` | greater / less than |\n| `>=` / `<=` | greater / less than or equal |\n| `<>` or `!=` | not equal |",
+      problem: "Find the premium games: return `title` and `price` for every game that costs **more than 30**.",
+      datasetId: "arcade",
+      statementType: "select",
+      starterSql: "SELECT title, price\nFROM games\nWHERE ",
+      hints: [
+        "Numbers are written without quotes: `30`.",
+        "\"More than\" means `>`, which excludes exactly 30.",
+        "`... WHERE price > 30;`",
+      ],
+      solution: {
+        sql: "SELECT title, price FROM games WHERE price > 30;",
+        explanation: "`price > 30` compares each game's price with 30 and keeps only the more expensive ones.",
+      },
+      expected: {
+        columns: ["title", "price"],
+        rows: [
+          ["Galaxy Drift", "49.99"],
+          ["Shadow Circuit", "59.99"],
+          ["Turbo Kart Arena", "39.99"],
+          ["Neon Rhythm", "34.99"],
+          ["Sky Pilots", "44.99"],
+        ],
+        ordered: false,
+      },
+    },
+    {
+      id: "t1-c2-03",
+      title: "Recent releases",
+      difficulty: "medium",
+      objective: "Use >= to include the boundary value.",
+      concept:
+        "`>` and `>=` differ only at the boundary: `release_year > 2020` skips 2020 itself, while `release_year >= 2020` includes it. Read the task carefully to pick the right one.",
+      problem: "List the `title` and `release_year` of every game released in **2020 or later**.",
+      datasetId: "arcade",
+      statementType: "select",
+      starterSql: "SELECT title, release_year\nFROM games\nWHERE ",
+      hints: [
+        "\"2020 or later\" must include games from 2020.",
+        "Use the greater-than-or-equal operator.",
+        "`... WHERE release_year >= 2020;`",
+      ],
+      solution: {
+        sql: "SELECT title, release_year FROM games WHERE release_year >= 2020;",
+        explanation: "`>=` keeps games from 2020 as well as every later year. With `>` the four 2020 games would be missing.",
+      },
+      expected: {
+        columns: ["title", "release_year"],
+        rows: [
+          ["Galaxy Drift", "2021"],
+          ["Farm Friends", "2020"],
+          ["Shadow Circuit", "2022"],
+          ["Starbound Tactics", "2023"],
+          ["Ocean Explorer", "2021"],
+          ["Mystic Grove", "2020"],
+          ["Block Quest", "2023"],
+          ["Robo Rumble", "2022"],
+          ["Desert Rally", "2020"],
+          ["Pocket Racer", "2021"],
+        ],
+        ordered: false,
+      },
+    },
+    {
+      id: "t1-c2-04",
+      title: "Not on mobile",
+      difficulty: "medium",
+      objective: "Exclude rows with the not-equal operator <>.",
+      concept:
+        "`<>` (or `!=`) keeps rows where a value is **different** from the one you give:\n\n```sql\nSELECT title FROM games WHERE genre <> 'Racing';\n```",
+      problem: "The store is running a desktop and console promotion. Return `title` and `platform` for every game that is **not** on `Mobile`.",
+      datasetId: "arcade",
+      statementType: "select",
+      starterSql: "SELECT title, platform\nFROM games\nWHERE ",
+      hints: [
+        "You want every platform except one.",
+        "MySQL's not-equal operator is `<>` (or `!=`).",
+        "`... WHERE platform <> 'Mobile';`",
+      ],
+      solution: {
+        sql: "SELECT title, platform FROM games WHERE platform <> 'Mobile';",
+        explanation: "`platform <> 'Mobile'` is true for PC and Console games and false for Mobile ones, so mobile games are left out.",
+      },
+      expected: {
+        columns: ["title", "platform"],
+        rows: [
+          ["Pixel Raiders", "PC"],
+          ["Galaxy Drift", "Console"],
+          ["Dungeon Logic", "PC"],
+          ["Shadow Circuit", "Console"],
+          ["Turbo Kart Arena", "Console"],
+          ["Starbound Tactics", "PC"],
+          ["Castle Builder", "PC"],
+          ["Mystic Grove", "PC"],
+          ["Neon Rhythm", "Console"],
+          ["Block Quest", "Console"],
+          ["Sky Pilots", "PC"],
+          ["Desert Rally", "PC"],
+        ],
+        ordered: false,
+      },
+    },
+  ],
+};

@@ -1,12 +1,14 @@
-# Local development + runner integration tests.
-# Values here are dev-only defaults; production secrets come from Railway env vars.
+# Local development + runner integration tests only.
+# The fallbacks below are deliberately obvious DEV-ONLY placeholders so `docker compose up`
+# works out of the box. Override them in `.env` (see .env.example). Production values are
+# set as Railway environment variables and never live in this file.
 services:
   mysql:
     build: ./sql-runner/mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-dev_root_password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devonly-root-password-not-secret}
       RUNNER_ADMIN_USER: ${RUNNER_ADMIN_USER:-qq_admin}
-      RUNNER_ADMIN_PASSWORD: ${RUNNER_ADMIN_PASSWORD:-dev_admin_password}
+      RUNNER_ADMIN_PASSWORD: ${RUNNER_ADMIN_PASSWORD:-devonly-admin-password-not-secret}
     ports:
       - "127.0.0.1:3307:3306"
     volumes:
@@ -25,11 +27,11 @@ services:
         condition: service_healthy
     environment:
       PORT: 4000
-      RUNNER_SECRET: ${RUNNER_SECRET:-dev_runner_secret_change_me_0123456789}
+      RUNNER_SECRET: ${RUNNER_SECRET:-devonly-runner-secret-not-for-production}
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
       RUNNER_ADMIN_USER: ${RUNNER_ADMIN_USER:-qq_admin}
-      RUNNER_ADMIN_PASSWORD: ${RUNNER_ADMIN_PASSWORD:-dev_admin_password}
+      RUNNER_ADMIN_PASSWORD: ${RUNNER_ADMIN_PASSWORD:-devonly-admin-password-not-secret}
     ports:
       - "127.0.0.1:4000:4000"
 

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import mysql, { type Connection, type FieldPacket, type ResultSetHeader } from "mysql2";
 import mysqlPromise, { type Pool } from "mysql2/promise";
-import type { Config } from "./config.js";
+import { worstCaseExecutionMs, type Config } from "./config.js";
 import { UserSqlError, isMysqlServerError, sanitizeMysqlMessage } from "./errors.js";
 import { checkStatement, type AllowedStatement, type StatementType } from "./statement.js";
 
@@ -10,7 +10,6 @@ export const DB_PREFIX = "qq_tmp_";
 export const USER_PREFIX = "qq_u_";
 const ID_PATTERN = /^[a-z0-9]+_[a-f0-9]+$/;
 
-const ADMIN_QUERY_TIMEOUT_MS = 15_000;
 const ER_QUERY_TIMEOUT = 3024; // max_execution_time exceeded
 const ER_QUERY_INTERRUPTED = 1317;
 
@@ -66,7 +65,7 @@ export class Executor {
       // Only trusted, content-generated setup SQL is ever sent on admin connections.
       multipleStatements: true,
       connectionLimit: config.MAX_CONCURRENT + 2,
-      connectTimeout: 10_000,
+      connectTimeout: config.ADMIN_QUERY_TIMEOUT_MS,
     });
   }
 
@@ -88,37 +87,61 @@ export class Executor {
     const user = USER_PREFIX + id;
     const password = randomBytes(24).toString("base64url");
 
-    let userCreated = false;
-    try {
-      await this.adminQuery(`CREATE DATABASE \`${database}\``);
-      await this.runSetup(database, input.setupSql);
+    // Hard budget for everything before the learner's SQL runs. No step starts after it
+    // and each step is raced against it, so a temp database is never live longer than
+    // worstCaseExecutionMs(config), which the config forces well below the sweeper's
+    // ORPHAN_MAX_AGE_MS.
+    const c = this.config;
+    const preRunDeadline = started + 3 * c.ADMIN_QUERY_TIMEOUT_MS + c.SETUP_TIMEOUT_MS;
+    const step = <T>(promise: () => Promise<T>) => {
+      const remaining = preRunDeadline - Date.now();
+      if (remaining <= 0) return Promise.reject(new PreRunTimeout());
+      return withTimeout(promise(), remaining, () => new PreRunTimeout());
+    };
 
-      await this.adminQuery("CREATE USER ?@'%' IDENTIFIED BY ? WITH MAX_USER_CONNECTIONS 2", [user, password]);
-      userCreated = true;
+    let preRunTimedOut = false;
+    try {
+      await step(() => this.adminQuery(`CREATE DATABASE \`${database}\``));
+      await step(() => this.runSetup(database, input.setupSql));
+
+      await step(() =>
+        this.adminQuery("CREATE USER ?@'%' IDENTIFIED BY ? WITH MAX_USER_CONNECTIONS 2", [user, password]),
+      );
       const privileges = input.allowedStatement === "select" ? "SELECT" : "SELECT, INSERT, UPDATE, DELETE";
       // `_` is a wildcard in GRANT database names; escape it so the grant covers exactly
       // this database (and stays within the admin's own `qq\_tmp\_%` grant).
       const exactDatabase = database.replaceAll("_", "\\_");
-      await this.adminQuery(`GRANT ${privileges} ON \`${exactDatabase}\`.* TO ?@'%'`, [user]);
+      await step(() => this.adminQuery(`GRANT ${privileges} ON \`${exactDatabase}\`.* TO ?@'%'`, [user]));
 
       const output = await this.runAsLearner({ ...input, database, user, password });
       return { statementType: check.statementType, ...output, durationMs: Date.now() - started };
+    } catch (err) {
+      if (err instanceof PreRunTimeout) preRunTimedOut = true;
+      throw err;
     } finally {
-      await this.cleanup(id, userCreated);
+      await this.cleanup(id, { keepDatabase: preRunTimedOut });
     }
   }
 
   /**
-   * Drops the user first, then the database. If dropping the user fails the database
-   * is kept on purpose: the sweeper finds orphans by database name and drops both.
+   * Drops the user first, then the database. The database is kept on purpose when
+   * dropping the user fails, or when a timed-out admin statement (e.g. CREATE USER)
+   * may still land after us: the sweeper finds orphans by database name and drops both.
    */
-  private async cleanup(id: string, userCreated: boolean): Promise<void> {
+  private async cleanup(id: string, { keepDatabase }: { keepDatabase: boolean }): Promise<void> {
+    const timeout = this.config.ADMIN_QUERY_TIMEOUT_MS;
     try {
-      if (userCreated) await this.adminQuery("DROP USER IF EXISTS ?@'%'", [USER_PREFIX + id]);
-      await this.adminQuery(`DROP DATABASE IF EXISTS \`${DB_PREFIX + id}\``);
+      await withTimeout(this.adminQuery("DROP USER IF EXISTS ?@'%'", [USER_PREFIX + id]), timeout);
+      if (keepDatabase) return;
+      await withTimeout(this.adminQuery(`DROP DATABASE IF EXISTS \`${DB_PREFIX + id}\``), timeout);
     } catch (err) {
       console.error(`[runner] cleanup failed for ${id}; the sweeper will retry`, errorSummary(err));
     }
+  }
+
+  /** The longest a live execution can keep its temp database. */
+  get worstCaseExecutionMs(): number {
+    return worstCaseExecutionMs(this.config);
   }
 
   /** Drops temporary databases (and their users) older than `maxAgeMs`. */
@@ -126,7 +149,7 @@ export class Executor {
     const [rows] = await this.admin.query<mysqlPromise.RowDataPacket[]>({
       sql: "SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE ?",
       values: [DB_PREFIX.replaceAll("_", "\\_") + "%"],
-      timeout: ADMIN_QUERY_TIMEOUT_MS,
+      timeout: this.config.ADMIN_QUERY_TIMEOUT_MS,
     });
 
     const swept: string[] = [];
@@ -150,19 +173,26 @@ export class Executor {
   }
 
   private async adminQuery(sql: string, values: unknown[] = []): Promise<void> {
-    await this.admin.query({ sql, values, timeout: ADMIN_QUERY_TIMEOUT_MS });
+    await this.admin.query({ sql, values, timeout: this.config.ADMIN_QUERY_TIMEOUT_MS });
   }
 
   private async runSetup(database: string, setupSql: string): Promise<void> {
     const conn = await this.admin.getConnection();
     try {
-      await conn.query({ sql: `USE \`${database}\``, timeout: ADMIN_QUERY_TIMEOUT_MS });
-      if (setupSql.trim()) await conn.query({ sql: setupSql, timeout: ADMIN_QUERY_TIMEOUT_MS });
+      await conn.query({ sql: `USE \`${database}\``, timeout: this.config.ADMIN_QUERY_TIMEOUT_MS });
+      if (setupSql.trim()) await conn.query({ sql: setupSql, timeout: this.config.SETUP_TIMEOUT_MS });
+      conn.release();
     } catch (err) {
+      // After a client-side timeout the connection is unusable: take it out of the pool.
+      // The server keeps running the statement, which blocks DROP USER/DATABASE, so kill
+      // it too (a user may kill its own threads; no extra privilege needed).
+      const threadId = conn.threadId;
+      conn.destroy();
+      if ((err as { code?: string }).code === "PROTOCOL_SEQUENCE_TIMEOUT") {
+        await this.adminQuery(`KILL CONNECTION ${Number(threadId)}`).catch(() => {});
+      }
       // A broken challenge setup is a content bug, not the learner's fault.
       throw new Error(`Challenge setup failed: ${errorSummary(err)}`, { cause: err });
-    } finally {
-      conn.release();
     }
   }
 
@@ -197,7 +227,7 @@ export class Executor {
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
-        kill = killConnection(credentials, conn).finally(() => conn.destroy());
+        kill = killConnection(credentials, conn, this.config.KILL_TIMEOUT_MS).finally(() => conn.destroy());
         reject(timeoutError(input.timeoutMs));
       }, input.timeoutMs);
     });
@@ -244,10 +274,25 @@ export class Executor {
       clearTimeout(timer);
       // The temp database can only be dropped once the learner's session is gone.
       if (kill) await kill;
-      else if (needsKill) await killConnection(credentials, conn);
+      else if (needsKill) await killConnection(credentials, conn, this.config.KILL_TIMEOUT_MS);
       conn.destroy();
     }
   }
+}
+
+class PreRunTimeout extends Error {
+  constructor() {
+    super("Execution setup exceeded its time budget");
+  }
+}
+
+/** Rejects if `promise` has not settled after `ms`. Does not cancel the underlying work. */
+function withTimeout<T>(promise: Promise<T>, ms: number, error = () => new Error(`Timed out after ${ms} ms`)): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(error()), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 function timeoutError(timeoutMs: number): UserSqlError {
@@ -264,16 +309,22 @@ function timeoutError(timeoutMs: number): UserSqlError {
 async function killConnection(
   credentials: { host: string; port: number; user: string; password: string },
   target: Connection,
+  budgetMs: number,
 ): Promise<void> {
   const threadId = target.threadId;
   if (!threadId) return;
   try {
-    const killer = await mysqlPromise.createConnection({ ...credentials, connectTimeout: 5_000 });
-    try {
-      await killer.query(`KILL CONNECTION ${Number(threadId)}`);
-    } finally {
-      killer.destroy();
-    }
+    await withTimeout(
+      (async () => {
+        const killer = await mysqlPromise.createConnection({ ...credentials, connectTimeout: budgetMs });
+        try {
+          await killer.query({ sql: `KILL CONNECTION ${Number(threadId)}`, timeout: budgetMs });
+        } finally {
+          killer.destroy();
+        }
+      })(),
+      budgetMs,
+    );
   } catch {
     // Already gone, or unreachable: the server-side max_execution_time is the backstop.
   }
