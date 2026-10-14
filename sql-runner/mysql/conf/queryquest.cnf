@@ -1,0 +1,9 @@
+[mysqld]
+# No reading/writing server files from SQL.
+local_infile = 0
+secure_file_priv = NULL
+skip_name_resolve = ON
+# Learners' databases are throwaway; keep the server small.
+max_connections = 200
+innodb_buffer_pool_size = 128M
+performance_schema = OFF
